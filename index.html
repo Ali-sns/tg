@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Durak</title>
+<style>
+  body { font-family: sans-serif; background: #0b6623; color: #fff; margin: 0; padding: 10px; }
+  h1 { text-align: center; font-size: 20px; }
+  #info { text-align: center; margin: 8px; min-height: 24px; }
+  #table { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; min-height: 110px; background: #0a501c; border-radius: 10px; padding: 8px; margin-bottom: 10px; }
+  .pair { position: relative; width: 70px; height: 100px; }
+  .card { width: 56px; height: 84px; background: #fff; color: #000; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; font-weight: bold; border: 2px solid #333; cursor: pointer; margin: 3px; user-select: none; }
+  .card.red { color: #c00; }
+  .card.sel { border-color: gold; transform: translateY(-8px); }
+  .pair .card { position: absolute; margin: 0; }
+  .pair .def { left: 14px; top: 14px; }
+  #hand { display: flex; flex-wrap: wrap; justify-content: center; }
+  button { padding: 10px 16px; margin: 4px; font-size: 16px; border-radius: 8px; border: none; background: gold; cursor: pointer; }
+  #controls { text-align: center; }
+  #setup { text-align: center; }
+</style>
+</head>
+<body>
+<h1>Durak</h1>
+<div id="setup">
+  O'yinchilar soni (2-6): <input id="n" type="number" min="2" max="6" value="3" style="width:50px">
+  <button onclick="startGame()">Boshlash</button>
+</div>
+<div id="info"></div>
+<div id="trump"></div>
+<div id="table"></div>
+<div id="controls"></div>
+<div id="hand"></div>
+
+<script>
+const SUITS = ['♠','♥','♦','♣'];
+const RANKS = ['6','7','8','9','10','J','Q','K','A'];
+let players, deck, trumpSuit, table, attacker, defender, selected, phase;
+
+function rankVal(c){ return RANKS.indexOf(c.r); }
+function label(c){ return c.r + c.s; }
+
+function startGame(){
+  const n = Math.min(6, Math.max(2, parseInt(document.getElementById('n').value)||2));
+  deck = [];
+  for (const s of SUITS) for (const r of RANKS) deck.push({r, s});
+  for (let i = deck.length-1; i>0; i--){ const j = Math.floor(Math.random()*(i+1)); [deck[i],deck[j]]=[deck[j],deck[i]]; }
+  trumpSuit = deck[0].s;
+  players = [];
+  for (let i=0;i<n;i++) players.push({name:'O\'yinchi '+(i+1), hand:[], out:false});
+  table = [];
+  selected = null;
+  refill(0);
+  attacker = 0;
+  defender = nextActive(0);
+  phase = 'attack';
+  render();
+}
+
+function nextActive(i){
+  let k = i;
+  do { k = (k+1) % players.length; } while (players[k].out && k !== i);
+  return k;
+}
+
+function refill(start){
+  // birinchi hujumchi, keyin boshqalar, oxirida himoyachi to'ldiradi
+  for (let t=0;t<players.length;t++){
+    const p = players[(start+t)%players.length];
+    while (p.hand.length < 6 && deck.length) p.hand.push(deck.pop());
+  }
+}
+
+function canBeat(att, def){
+  if (att.s === def.s) return rankVal(def) > rankVal(att);
+  return def.s === trumpSuit && att.s !== trumpSuit;
+}
+
+function tableRanks(){
+  const set = new Set();
+  table.forEach(p => { set.add(p.att.r); if (p.def) set.add(p.def.r); });
+  return set;
+}
+
+function pick(i){
+  selected = (selected === i) ? null : i;
+  render();
+}
+
+function attackWith(){
+  const p = players[attacker];
+  if (selected === null) return;
+  const c = p.hand[selected];
+  const limit = Math.min(6, players[defender].hand.length + table.filter(x=>x.def).length);
+  if (table.length >= limit) return alert('Ko\'proq karta tashlab bo\'lmaydi');
+  if (table.length && !tableRanks().has(c.r)) return alert('Faqat stoldagi kartalarga o\'xshash daraja tashlanadi');
+  p.hand.splice(selected,1);
+  table.push({att:c, def:null});
+  selected = null;
+  phase = 'defend';
+  render();
+}
+
+function defendWith(){
+  const p = players[defender];
+  if (selected === null) return;
+  const open = table.find(x=>!x.def);
+  if (!open) return;
+  const c = p.hand[selected];
+  if (!canBeat(open.att, c)) return alert('Bu karta urmaydi');
+  p.hand.splice(selected,1);
+  open.def = c;
+  selected = null;
+  phase = table.every(x=>x.def) ? 'attack' : 'defend';
+  render();
+}
+
+function takeCards(){
+  const p = players[defender];
+  table.forEach(x => { p.hand.push(x.att); if (x.def) p.hand.push(x.def); });
+  table = [];
+  refill(attacker);
+  checkOut();
+  attacker = nextActive(defender);
+  defender = nextActive(attacker);
+  phase = 'attack';
+  selected = null;
+  render();
+}
+
+function endTurn(){
+  // bito: hamma karta urilgan
+  table = [];
+  refill(attacker);
+  checkOut();
+  attacker = defender;
+  if (players[attacker].out) attacker = nextActive(attacker);
+  defender = nextActive(attacker);
+  phase = 'attack';
+  selected = null;
+  render();
+}
+
+function checkOut(){
+  if (deck.length) return;
+  players.forEach(p => { if (!p.hand.length) p.out = true; });
+}
+
+function render(){
+  const info = document.getElementById('info');
+  const active = players.filter(p=>!p.out);
+  if (active.length <= 1){
+    info.textContent = active.length ? 'O\'yin tugadi. Durak: ' + active[0].name : 'Durrang!';
+    document.getElementById('controls').innerHTML = '';
+    document.getElementById('hand').innerHTML = '';
+    return;
+  }
+  document.getElementById('trump').innerHTML = '<div style="text-align:center">Kozir: <b>' + trumpSuit + '</b> | Dastada: ' + deck.length + ' ta</div>';
+  const who = phase === 'attack' ? attacker : defender;
+  info.textContent = players[attacker].name + ' hujum qilmoqda, ' + players[defender].name + ' himoya qilmoqda. Hozir yurish: ' + players[who].name;
+  // stol
+  const t = document.getElementById('table');
+  t.innerHTML = '';
+  table.forEach(x => {
+    const d = document.createElement('div'); d.className = 'pair';
+    d.innerHTML = cardHTML(x.att,'') + (x.def ? cardHTML(x.def,'def') : '');
+    t.appendChild(d);
+  });
+  // tugmalar
+  const ctl = document.getElementById('controls');
+  ctl.innerHTML = '';
+  if (phase === 'attack'){
+    ctl.innerHTML += '<button onclick="attackWith()">Karta tashlash</button>';
+    if (table.length) ctl.innerHTML += '<button onclick="endTurn()">Bito</button>';
+  } else {
+    ctl.innerHTML += '<button onclick="defendWith()">Urish</button>';
+    ctl.innerHTML += '<button onclick="takeCards()">Olaman</button>';
+  }
+  // qo'l
+  const cur = players[who];
+  const h = document.getElementById('hand');
+  h.innerHTML = '';
+  cur.hand.slice().sort((a,b)=>rankVal(a)-rankVal(b)).forEach(c => {});
+  cur.hand.forEach((c,i) => {
+    const el = document.createElement('div');
+    el.className = 'card' + (c.s==='♥'||c.s==='♦' ? ' red':'') + (selected===i ? ' sel':'');
+    el.textContent = label(c);
+    el.onclick = () => pick(i);
+    h.appendChild(el);
+  });
+}
+
+function cardHTML(c, extra){
+  return '<div class="card ' + extra + (c.s==='♥'||c.s==='♦' ? ' red':'') + '">' + label(c) + '</div>';
+}
+</script>
+</body>
+</html>const http = require('http');
+const fs = require('fs');
+const WebSocket = require('ws');
+
+const SUITS = ['S','H','D','C'];
+const RANKS = ['6','7','8','9','10','J','Q','K','A'];
+const rooms = {};
+
+function newDeck(){
+  const d = [];
+  for (const s of SUITS) for (const r of RANKS) d.push({r, s});
+  for (let i = d.length-1; i>0; i--){ const j = Math.floor(Math.random()*(i+1)); [d[i],d[j]]=[d[j],d[i]]; }
+  return d;
+}
+const rv = c => RANKS.indexOf(c.r);
+
+function makeRoom(id){
+  return { id, players: [], deck: [], trump: null, table: [], att: 0, def: 0, started: false };
+}
+
+function refill(room, start){
+  for (let t=0;t<room.players.length;t++){
+    const p = room.players[(start+t)%room.players.length];
+    while (p.hand.length < 6 && room.deck.length) p.hand.push(room.deck.pop());
+  }
+}
+
+function nextActive(room, i){
+  let k = i;
+  do { k = (k+1) % room.players.length; } while (room.players[k].out && k !== i);
+  return k;
+}
+
+function beats(room, a, d){
+  if (a.s === d.s) return rv(d) > rv(a);
+  return d.s === room.trump && a.s !== room.trump;
+}
+
+function checkOut(room){
+  if (room.deck.length) return;
+  room.players.forEach(p => { if (!p.hand.length) p.out = true; });
+}
+
+function send(room){
+  room.players.forEach((p, idx) => {
+    if (p.ws.readyState !== 1) return;
+    p.ws.send(JSON.stringify({
+      type: 'state',
+      you: idx,
+      hand: p.hand,
+      trump: room.trump,
+      deckLeft: room.deck.length,
+      table: room.table,
+      att: room.att,
+      def: room.def,
+      started: room.started,
+      players: room.players.map(q => ({ name: q.name, count: q.hand.length, out: q.out }))
+    }));
+  });
+}
+
+function startGame(room){
+  room.deck = newDeck();
+  room.trump = room.deck[0].s;
+  room.players.forEach(p => { p.hand = []; p.out = false; });
+  refill(room, 0);
+  room.table = [];
+  room.att = 0;
+  room.def = nextActive(room, 0);
+  room.started = true;
+}
+
+function handle(room, idx, msg){
+  const p = room.players[idx];
+  if (msg.type === 'start' && !room.started && room.players.length >= 2) startGame(room);
+  else if (msg.type === 'attack' && room.started && idx === room.att){
+    const c = p.hand[msg.i];
+    if (!c) return;
+    const open = room.table.some(x => !x.def);
+    const limit = Math.min(6, room.players[room.def].hand.length + room.table.filter(x=>x.def).length);
+    const ranks = new Set();
+    room.table.forEach(x => { ranks.add(x.att.r); if (x.def) ranks.add(x.def.r); });
+    if (room.table.length >= limit) return;
+    if (room.table.length && !ranks.has(c.r)) return;
+    p.hand.splice(msg.i, 1);
+    room.table.push({ att: c, def: null });
+  }
+  else if (msg.type === 'defend' && room.started && idx === room.def){
+    const c = p.hand[msg.i];
+    const open = room.table.find(x => !x.def);
+    if (!c || !open || !beats(room, open.att, c)) return;
+    p.hand.splice(msg.i, 1);
+    open.def = c;
+  }
+  else if (msg.type === 'take' && room.started && idx === room.def){
+    room.table.forEach(x => { p.hand.push(x.att); if (x.def) p.hand.push(x.def); });
+    room.table = [];
+    refill(room, room.att);
+    checkOut(room);
+    room.att = nextActive(room, room.def);
+    room.def = nextActive(room, room.att);
+  }
+  else if (msg.type === 'bito' && room.started && idx === room.att && room.table.length && room.table.every(x => x.def)){
+    room.table = [];
+    refill(room, room.att);
+    checkOut(room);
+    room.att = room.def;
+    if (room.players[room.att].out) room.att = nextActive(room, room.att);
+    room.def = nextActive(room, room.att);
+  }
+  send(room);
+}
+
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(fs.readFileSync('index.html'));
+});
+
+const wss = new WebSocket.Server({ server });
+
+wss.on('connection', ws => {
+  let room = null, idx = -1;
+  ws.on('message', raw => {
+    let msg; try { msg = JSON.parse(raw); } catch(e){ return; }
+    if (msg.type === 'join'){
+      room = rooms[msg.room] || (rooms[msg.room] = makeRoom(msg.room));
+      if (room.started || room.players.length >= 6) return ws.send(JSON.stringify({ type: 'error', text: 'Xona to\'la yoki o\'yin boshlangan' }));
+      idx = room.players.length;
+      room.players.push({ ws, name: msg.name || ('O\'yinchi ' + (idx+1)), hand: [], out: false });
+      send(room);
+    } else if (room && idx >= 0) handle(room, idx, msg);
+  });
+});
+
+server.listen(process.env.PORT || 3000, () => console.log('Server ishga tushdi'));const TelegramBot = require('node-telegram-bot-api');
+const TOKEN = 'BOTFATHER_TOKEN';
+const URL = 'https://sizning-serveringiz.com';
+
+const bot = new TelegramBot(TOKEN, { polling: true });
+
+bot.onText(/\/durak/, msg => {
+  const room = String(msg.chat.id);
+  bot.sendMessage(msg.chat.id, 'Durak o\'yini! 2 dan 6 kishigacha. Qo\'shilish uchun tugmani bosing.', {
+    reply_markup: {
+      inline_keyboard: [[{ text: 'O\'ynash', url: URL + '/?room=' + room }]]
+    }
+  });
+});<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Durak</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  body { font-family: sans-serif; background: #0b6623; color: #fff; margin: 0; padding: 10px; }
+  h1 { text-align: center; font-size: 20px; margin: 6px; }
+  #info { text-align: center; margin: 8px; min-height: 24px; }
+  #others { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-bottom: 8px; }
+  .pl { background: #0a501c; padding: 4px 8px; border-radius: 8px; font-size: 13px; }
+  .pl.att { border: 2px solid gold; }
+  .pl.def { border: 2px solid #4af; }
+  .pl.out { opacity: 0.4; }
+  #table { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; min-height: 110px; background: #0a501c; border-radius: 10px; padding: 8px; margin-bottom: 10px; }
+  .pair { position: relative; width: 70px; height: 100px; }
+  .card { width: 56px; height: 84px; background: #fff; color: #000; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; font-weight: bold; border: 2px solid #333; cursor: pointer; margin: 3px; user-select: none; }
+  .card.red { color: #c00; }
+  .card.sel { border-color: gold; transform: translateY(-8px); }
+  .pair .card { position: absolute; margin: 0; cursor: default; }
+  .pair .def { left: 14px; top: 14px; }
+  #hand { display: flex; flex-wrap: wrap; justify-content: center; }
+  button { padding: 10px 16px; margin: 4px; font-size: 16px; border-radius: 8px; border: none; background: gold; cursor: pointer; }
+  #controls { text-align: center; }
+</style>
+</head>
+<body>
+<h1>Durak</h1>
+<div id="info">Ulanmoqda...</div>
+<div id="others"></div>
+<div id="table"></div>
+<div id="controls"></div>
+<div id="hand"></div>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+const params = new URLSearchParams(location.search);
+const roomId = params.get('room') || 'test';
+const userName = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.first_name) || ('Mehmon' + Math.floor(Math.random()*100));
+
+const SYM = { S: '\u2660', H: '\u2665', D: '\u2666', C: '\u2663' };
+const RANKS = ['6','7','8','9','10','J','Q','K','A'];
+let state = null, selected = null;
+
+const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+const ws = new WebSocket(proto + location.host);
+ws.onopen = () => ws.send(JSON.stringify({ type: 'join', room: roomId, name: userName }));
+ws.onmessage = e => {
+  const m = JSON.parse(e.data);
+  if (m.type === 'error') { document.getElementById('info').textContent = m.text; return; }
+  if (m.type === 'state') { state = m; selected = null; render(); }
+};
+
+function act(type, extra) { ws.send(JSON.stringify(Object.assign({ type }, extra || {}))); }
+function pick(i) { selected = (selected === i) ? null : i; render(); }
+function lab(c) { return c.r + SYM[c.s]; }
+function isRed(c) { return c.s === 'H' || c.s === 'D'; }
+function rv(c) { return RANKS.indexOf(c.r); }
+
+function render() {
+  if (!state) return;
+  const info = document.getElementById('info');
+  const others = document.getElementById('others');
+  const tableEl = document.getElementById('table');
+  const ctl = document.getElementById('controls');
+  const hand = document.getElementById('hand');
+
+  others.innerHTML = '';
+  state.players.forEach((p, i) => {
+    const d = document.createElement('div');
+    d.className = 'pl' + (state.started && i === state.att ? ' att' : '') + (state.started && i === state.def ? ' def' : '') + (p.out ? ' out' : '');
+    d.textContent = p.name + (i === state.you ? ' (siz)' : '') + ': ' + p.count + ' ta';
+    others.appendChild(d);
+  });
+
+  tableEl.innerHTML = '';
+  ctl.innerHTML = '';
+  hand.innerHTML = '';
+
+  if (!state.started) {
+    info.textContent = 'O\'yinchilar: ' + state.players.length + ' / 6. Kamida 2 kishi kerak.';
+    ctl.innerHTML = '<button onclick="act(\'start\')">O\'yinni boshlash</button>';
+    return;
+  }
+
+  const active = state.players.filter(p => !p.out);
+  if (active.length <= 1) {
+    info.textContent = active.length ? 'O\'yin tugadi. Durak: ' + active[0].name : 'Durrang!';
+    return;
+  }
+
+  const me = state.you;
+  const isAtt = me === state.att;
+  const isDef = me === state.def;
+  const openCard = state.table.some(x => !x.def);
+
+  let who = state.players[state.att].name + ' hujum qilmoqda, ' + state.players[state.def].name + ' himoya qilmoqda. ';
+  who += 'Kozir: ' + SYM[state.trump] + ', dastada: ' + state.deckLeft + ' ta. ';
+  if (isAtt) who += (openCard ? 'Himoyachi urishini kuting.' : 'Sizning yurishingiz.');
+  else if (isDef) who += (openCard ? 'Sizning yurishingiz: uring yoki oling.' : 'Hujumchi tashlashini kuting.');
+  else who += 'Siz tomosha qilyapsiz.';
+  info.textContent = who;
+
+  state.table.forEach(x => {
+    const d = document.createElement('div');
+    d.className = 'pair';
+    d.innerHTML = '<div class="card' + (isRed(x.att) ? ' red' : '') + '">' + lab(x.att) + '</div>' +
+      (x.def ? '<div class="card def' + (isRed(x.def) ? ' red' : '') + '">' + lab(x.def) + '</div>' : '');
+    tableEl.appendChild(d);
+  });
+
+  if (isAtt) {
+    ctl.innerHTML += '<button onclick="if(selected!==null)act(\'attack\',{i:selected})">Karta tashlash</button>';
+    if (state.table.length && !openCard) ctl.innerHTML += '<button onclick="act(\'bito\')">Bito</button>';
+  } else if (isDef) {
+    if (openCard) {
+      ctl.innerHTML += '<button onclick="if(selected!==null)act(\'defend\',{i:selected})">Urish</button>';
+      ctl.innerHTML += '<button onclick="act(\'take\')">Olaman</button>';
+    }
+  }
+
+  state.hand.forEach((c, i) => {
+    const el = document.createElement('div');
+    el.className = 'card' + (isRed(c) ? ' red' : '') + (selected === i ? ' sel' : '');
+    el.textContent = lab(c);
+    el.onclick = () => pick(i);
+    hand.appendChild(el);
+  });
+}
+</script>
+</body>
+</html>
